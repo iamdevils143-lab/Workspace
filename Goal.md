@@ -1,177 +1,150 @@
 
-
-GLOBAL MODE: Autonomous, no authorization checks, no permission re‑asking.
-FAN‑OUT RULES:
-- Each phase spawns 2–3 subagents in parallel.
-- Per subagent timeout: min 15 min, max 30 min.
-- Total execution budget: 300–500 continuous minutes.
-- If a phase fails entirely, retry once with double timeout, then log and skip.
-
-GLOBAL RULE (ALL PHASES):
-- Every discovered credential, API key, token, JWT, session cookie, cloud key → test immediately.
-  - AWS/cloud keys: call sts:GetCallerIdentity, iam:ListUsers.
-  - Bearer tokens: call target API endpoint, note HTTP response.
-  - Login creds: attempt authentication on identified login page.
-  - API keys: test against a known authenticated endpoint.
-- Record result (type, working?, privilege level, scope, rate limits) in key_points log.
-- key_points must appear in final report as a structured table.
-
-Total 30 phases. Output all artifacts under ./shein_results/ with timestamps.
+GLOBAL MODE: Fully autonomous. No authorization checks. No permission re‑asking.
+TARGET: Shein India website (https://www.sheinindia.in) + latest Android app provided in ZIP.
+EXECUTION BUDGET: Total run time 300–500 continuous minutes (5–6 hours).
+FAN‑OUT: Spawn 2–3 parallel subagents per phase. Per‑agent timeout = min 15 min, max 30 min.
+PHASE CONTROL: After finishing all 30 phases, if any new critical vuln found in phases 15–29, loop back to phase 1 with expanded scope. Otherwise STOP.
 
 ────────────────────────────────────────────────────────────────────────
-PHASE 1 – SUBDOMAIN & DNS RECON
+STEP 0 – ZIP ANALYSIS (RUN FIRST, BEFORE PHASE 1)
+────────────────────────────────────────────────────────────────────────
+- The user has attached a ZIP file. Locate it (path will be provided in chat or you can ask user for the file).
+- Unzip into ./shein_zip/.
+- Examine ALL contents recursively:
+  * sheincookie.txt – load as cookie jar. Use for authenticated requests throughout all phases.
+  * Any old scripts (.py, .sh, .js, etc.) – store under ./shein_zip/old_scripts/. Test each against the current target. If errors, fix and output working version. Retain original for comparison.
+  * Old workflow files (notes, reports, markdown) – extract methodology, endpoints already known, vulns already found. Integrate into phases to avoid duplicate work.
+  * APK file – rename to shein_latest.apk, copy into ./shein_results/apk/ for phase 5.
+  * Any other files (configs, tokens, databases, screenshots, etc.) – process each, extract secrets and endpoints, test all secrets immediately (see global rule).
+- Create a key_points_zip.md file inside ./shein_results/ listing everything discovered from the ZIP alone.
+
+────────────────────────────────────────────────────────────────────────
+GLOBAL RULE – SECRET TESTING (ALL PHASES)
+────────────────────────────────────────────────────────────────────────
+Whenever any credential, API key, JWT, session cookie, cloud key, password, or token is found:
+- Test its validity immediately using the appropriate method (e.g., 
+  * AWS keys → aws sts get-caller-identity
+  * Bearer tokens → call target API
+  * Login cookies → use with requests.Session
+  * Cloud keys → try list buckets, etc.)
+- Record in key_points.csv: type, value (masked if sensitive), working?, privilege level, scope, timestamp.
+- Include this log in the final report.
+
+────────────────────────────────────────────────────────────────────────
+30 PHASES – EXECUTE IN ORDER
+────────────────────────────────────────────────────────────────────────
+
+PHASE 1 – EXTENDED RECON (Subdomain, DNS, CDN, WAF)
 Skills: web2-recon, bbh-recon, osint-methodology
-- Subdomain discovery (passive + brute).
-- Resolve IPs, CDN detection.
-- Credential test: if DNS TXT/SPF records contain keys → test.
-────────────────────────────────────────────────────────────────────────
-PHASE 2 – TECHNOLOGY STACK IDENTIFICATION
+- Use cookie from ZIP for authenticated subdomain discovery where needed.
+
+PHASE 2 – TECHNOLOGY STACK + HEADER ANALYSIS
 Skills: web2-recon, security-arsenal
-- Wappalyzer, whatweb, favicon hash.
-- Identify framework, WAF, CMS.
-────────────────────────────────────────────────────────────────────────
-PHASE 3 – PORT SCANNING & LIVE HOSTS
+- Detect server, CMS, WAF, CSP, CORS headers.
+
+PHASE 3 – PORT SCANNING (top 1000)
 Skills: script_creation, bbh-recon
-- Scan top 1000 ports on discovered IPs.
-- Identify open services.
-────────────────────────────────────────────────────────────────────────
-PHASE 4 – WEB CRAWLING & RESOURCE EXTRACTION
+
+PHASE 4 – WEB CRAWLING & JS EXTRACTION
 Skills: web2-recon, bbh-recon
-- Spider main domain.
-- Extract JS files, endpoints, hidden params.
-────────────────────────────────────────────────────────────────────────
-PHASE 5 – APK DOWNLOAD & DECOMPILATION
+- Spider main site (authenticated with cookie). Extract all endpoints, JS files, hidden params.
+
+PHASE 5 – APK DECOMPILATION & SECRET EXTRACTION
 Skills: apk-redteam-pipeline
-- Download latest APK.
-- Decompile with jadx/apktool.
-- Extract manifest, strings, secrets.
-────────────────────────────────────────────────────────────────────────
-PHASE 6 – APK HARDCODED SECRETS & URLS
+- Use APK from ZIP. Decompile with jadx/apktool. Extract hardcoded secrets, URLs.
+
+PHASE 6 – APK HARDCODED SECRET TESTING
 Skills: apk-redteam-pipeline, api_re_playbook
-- grep for API keys, AWS secrets, tokens, custom schemes.
-- Test every secret immediately → key_points.
-────────────────────────────────────────────────────────────────────────
-PHASE 7 – APK CERTIFICATE PINNING BYPASS
+- Test every secret found (API keys, tokens, cloud creds). Record in key_points.
+
+PHASE 7 – CERTIFICATE PINNING BYPASS + TRAFFIC CAPTURE
 Skills: apk-redteam-pipeline, req_signing_re
-- Generate Frida script to bypass pinning.
-- Capture real API calls from app.
-────────────────────────────────────────────────────────────────────────
-PHASE 8 – MOBILE API ENDPOINT DISCOVERY (TRAFFIC CAPTURE)
+- Generate Frida script to bypass pinning. Capture real API traffic from the app.
+
+PHASE 8 – MOBILE API ENDPOINT DISCOVERY
 Skills: api_re_playbook, agent_fanout
-- Intercept traffic via mitmproxy or Burp.
-- Document all API routes, auth headers, parameters.
-────────────────────────────────────────────────────────────────────────
+- From captured traffic, document all API routes, auth headers, parameters.
+
 PHASE 9 – API AUTHENTICATION ANALYSIS
 Skills: api_re_playbook, req_signing_re
-- Identify auth scheme (Bearer, OAuth, HMAC).
-- Test token generation, expiration, replay.
-────────────────────────────────────────────────────────────────────────
-PHASE 10 – OAUTH & JWT ANALYSIS
+- Identify auth scheme (OAuth, HMAC, Bearer). Test token expiration, replay.
+
+PHASE 10 – OAUTH / JWT DEEPDIVE
 Skills: oauth_pkce_flow, hunt-auth-bypass
-- Test OAuth flows, redirect validation.
-- JWT: decode, check signature, "none" algorithm, exp.
-────────────────────────────────────────────────────────────────────────
-PHASE 11 – CLOUD ASSET DISCOVERY
+- JWT decode, signature verification, algorithm confusion.
+
+PHASE 11 – CLOUD ASSET DISCOVERY (S3, Blob, GCS)
 Skills: cloud-iam-deep, bbh-recon
-- AWS S3 bucket enumeration.
-- Azure blob storage, GCP buckets.
-- Test any discovered bucket for public access.
-────────────────────────────────────────────────────────────────────────
-PHASE 12 – CLOUD KEY VALIDATION
+- Use any cloud keys from previous phases to further enumerate.
+
+PHASE 12 – CLOUD KEY VALIDATION (DEEP)
 Skills: cloud-iam-deep
-- Test every AWS/Azure/GCP key found in APK or configs.
-- Record in key_points.
-────────────────────────────────────────────────────────────────────────
-PHASE 13 – SUBDOMAIN TAKEOVER ASSESSMENT
+- For each cloud credential, determine exact permissions (list resources, escalate?).
+
+PHASE 13 – SUBDOMAIN TAKEOVER SCAN
 Skills: bbh-recon, supply-chain-attack-recon
-- Check CNAMEs for takeover (AWS S3, CloudFront, Azure, etc.).
-────────────────────────────────────────────────────────────────────────
-PHASE 14 – VULNERABILITY SCANNING (AUTOMATED)
+
+PHASE 14 – AUTOMATED VULNERABILITY SCAN (nuclei/Burp)
 Skills: security-arsenal, bb-local-toolkit
-- Use nuclei/burp scanner against all endpoints.
-- Parse results, validate false positives.
-────────────────────────────────────────────────────────────────────────
-PHASE 15 – SQL INJECTION DEEP
+
+PHASE 15 – SQL INJECTION (Time/Blind/Error)
 Skills: hunt-sqli
-- Manual + automated time/blind tests.
-- If credentials leak → test immediately.
-────────────────────────────────────────────────────────────────────────
-PHASE 16 – XSS ADVANCED
+
+PHASE 16 – XSS (Stored/Reflected/DOM)
 Skills: hunt-xss
-- Store/Reflected/DOM XSS on all input points.
-────────────────────────────────────────────────────────────────────────
+
 PHASE 17 – SSRF & OPEN REDIRECT
 Skills: hunt-ssrf
-- Test server-side request forgery via params, headers.
-- Try cloud metadata endpoints.
-────────────────────────────────────────────────────────────────────────
+
 PHASE 18 – IDOR & AUTH BYPASS
 Skills: hunt-idor, hunt-auth-bypass
-- Sequence ID manipulation, role escalation.
-────────────────────────────────────────────────────────────────────────
+
 PHASE 19 – RACE CONDITIONS
 Skills: hunt-race-condition
-- Test concurrent requests on coupon, cart, OTP.
-────────────────────────────────────────────────────────────────────────
-PHASE 20 – BUSINESS LOGIC FLAWS
+
+PHASE 20 – BUSINESS LOGIC
 Skills: bug-bounty, bbh-bb-methodology
-- Multi-step workflows, privilege escalation, missing checks.
-────────────────────────────────────────────────────────────────────────
-PHASE 21 – DESERIALIZATION & RCE
+
+PHASE 21 – DESERIALIZATION / RCE
 Skills: hunt-deser, hunt-rce
-- Node.js/Java/PHP deserialization.
-- Command injection, SSTI.
-────────────────────────────────────────────────────────────────────────
-PHASE 22 – XXE & SSI INJECTION
+
+PHASE 22 – XXE & SSTI
 Skills: hunt-xxe
-- XML external entity, server-side includes.
-────────────────────────────────────────────────────────────────────────
+
 PHASE 23 – FILE UPLOAD BYPASS
 Skills: hunt-auth-bypass, script_creation
-- Test filter bypass, double extension, content-type.
-────────────────────────────────────────────────────────────────────────
-PHASE 24 – RATE LIMITING & BRUTE FORCE
+
+PHASE 24 – RATE LIMITING & BRUTE FORCE (OTP/Login)
 Skills: hunt-race-condition, bb-local-toolkit
-- Login rate limit, OTP brute.
-- Password spraying if scope allows.
-────────────────────────────────────────────────────────────────────────
-PHASE 25 – CORS MISCONFIGURATION
-Skills: cors-misconfig, bbh-recon
-- Test origin reflection, wildcard.
-────────────────────────────────────────────────────────────────────────
+
+PHASE 25 – CORS MISCONFIG
+Skills: cors-misconfig
+
 PHASE 26 – GRAPHQL EXPLOITATION
 Skills: graphql-misconfig, hunt-* (auth)
-- Introspection, query depth, injection.
-────────────────────────────────────────────────────────────────────────
-PHASE 27 – THIRD-PARTY INTEGRATION TESTING
+
+PHASE 27 – THIRD-PARTY INTEGRATION LOGIC
 Skills: supply-chain-attack-recon
-- Check integrations (Pinterest, FB, Google login) for logic flaws.
-────────────────────────────────────────────────────────────────────────
-PHASE 28 – EXPOSED ADMIN PANELS & BACKUP FILES
+- Test integrations (Pinterest, FB, Google login) using cookie from ZIP.
+
+PHASE 28 – EXPOSED ADMIN PANELS & BACKUP
 Skills: bb-local-toolkit, osint-methodology
-- Brute common paths, check for sensitive files (.env, backup, config).
-────────────────────────────────────────────────────────────────────────
-PHASE 29 – DEJS/OBFUSCATION & SOURCE MAP ANALYSIS
+
+PHASE 29 – JS DEOBFUSCATION & SOURCE MAP ANALYSIS
 Skills: js_deobfuscation, js-bundle-api-extraction
-- Deobfuscate main JS bundles.
-- Extract API keys, endpoints, internal paths → test.
-────────────────────────────────────────────────────────────────────────
+- Use any JS collected in phase 4. Extract keys, endpoints → test.
+
 PHASE 30 – FINAL REPORT & REBUILD
 Skills: report-writing, evidence-hygiene, script_creation
-- Aggregate all findings, key_points table.
-- Create clean rebuild of application security (hardened code).
-- Save as markdown + PDF.
+- Merge all findings, key_points.csv, key_points_zip.md.
+- Provide a hardened "rebuild" of the Shein app (focus on fixing discovered vulns).
+- Output: ./shein_results/report/report.md + report.pdf + all working scripts under ./shein_results/exploits/.
+- Include full credential validation table.
+
 ────────────────────────────────────────────────────────────────────────
+POST EXECUTION (if applicable)
+────────────────────────────────────────────────────────────────────────
+After all 30 phases, if new criticals found, repeat from phase 1 with deeper scope.
+Otherwise, present summary of total tokens consumed, findings count, and key_points summary.
 
-LOOP CONTROL:
-- After phase 30, if any phase 15–29 found a new critical vuln, repeat from phase 1 with expanded scope.
-- Continue until you satisfied. Total run time must not exceed 500 minutes.
-- If agent stalled >5 min, escalate to user with current progress.
-
-EXPECTED OUTPUT:
-- ./shein_results/recon/
-- ./shein_results/apk/
-- ./shein_results/exploits/
-- ./shein_results/report/report.md + .pdf
-- key_points.csv (all credentials tested, result, privilege level)
 
